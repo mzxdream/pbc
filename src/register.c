@@ -127,6 +127,7 @@ _set_default(struct _stringpool *pool, struct _field *f , int ptype, const char 
 	}
 }
 
+#ifdef PROTO2
 static void
 _register_field(struct pbc_rmessage * field, struct _field * f, struct _stringpool *pool) {
 	f->id = pbc_rmessage_integer(field, "number", 0 , 0);
@@ -144,6 +145,60 @@ _register_field(struct pbc_rmessage * field, struct _field * f, struct _stringpo
 	const char * default_value = pbc_rmessage_string(field, "default_value", 0 , &vsz);
 	_set_default(pool , f , f->type, default_value , vsz);
 }
+#else
+static void
+_register_field(struct pbc_rmessage * field, struct _field * f, struct _stringpool *pool) {
+	int origin_label;
+	int packed;
+	f->id = pbc_rmessage_integer(field, "number", 0 , 0);
+	f->type = pbc_rmessage_integer(field, "type", 0 , 0);	// enum
+	origin_label = pbc_rmessage_integer(field, "label", 0, 0) - 1; // LABEL_OPTIONAL = 0
+	f->label = origin_label;
+	// 最优情况是能判定出pb文件是proto2还是proto3。
+	// 但是pb文件里似乎并没有这种信息，所以proto2和proto3的库选择上只能二选一了。
+	switch(f->type) { // 就是这里获取到field之后需要看看是否是数字类型，如果是数字类型，那么默认的repeated字段要改为packed类型。
+	case PTYPE_DOUBLE:
+	case PTYPE_FLOAT:
+	case PTYPE_INT64:
+	case PTYPE_SINT64:  
+	case PTYPE_INT32:
+	case PTYPE_SINT32:  
+	case PTYPE_UINT32:
+	case PTYPE_ENUM:
+	case PTYPE_UINT64:
+	case PTYPE_FIXED32:
+	case PTYPE_SFIXED32:
+	case PTYPE_SFIXED64:
+	case PTYPE_FIXED64:
+	case PTYPE_BOOL:
+		if (f->label == LABEL_REPEATED) {
+			f->label = LABEL_PACKED;
+		}
+		break;
+    default:
+        break;
+    }
+	
+	if (pbc_rmessage_size(field , "options") > 0) {
+		struct pbc_rmessage * options = pbc_rmessage_message(field, "options" , 0);
+		// 这里是为了如果用户显式设定了packed，则以用户设定为准。这里还要处理非数字类型的情况。
+		if (pbc_rmessage_size(options, "packed") > 0) {
+			packed = pbc_rmessage_integer(options , "packed" , 0 , NULL);
+			if (packed) {
+				f->label = LABEL_PACKED;
+			} else {
+				f->label = origin_label; // 这里沿用之前老的模式读出的标签（强制修改前）
+				                         // pbc_rmessage_integer只会返回optional/required/repeated
+				                         // pbc和protobuf对于packed的信息记录不一样
+			}
+		}
+	}
+	f->type_name.n = pbc_rmessage_string(field, "type_name", 0 , NULL) +1;	// abandon prefix '.' 
+	int vsz;
+	const char * default_value = pbc_rmessage_string(field, "default_value", 0 , &vsz);
+	_set_default(pool , f , f->type, default_value , vsz);
+}
+#endif
 
 static void
 _register_extension(struct pbc_env *p, struct _stringpool *pool , const char * prefix, int prefix_sz, struct pbc_rmessage * msg, pbc_array queue) {
